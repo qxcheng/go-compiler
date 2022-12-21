@@ -1,0 +1,24 @@
+//package main
+
+//import "fmt"
+
+//var total int // global varible
+//
+//func myprint(num int) {
+//	fmt.Printf("myprint: %d\n", num)
+//}
+//
+//func main() {
+//	total = 10
+//	var i int
+//	for i = 0; i < total; i++ {
+//		if i%2 == 0 {
+//			myprint(i)
+//		} else {
+//			fmt.Printf("main: %d\n", i)
+//		}
+//	}
+//}
+
+print (3 + 4) * 5;
+print 3 + 4 - 5;
