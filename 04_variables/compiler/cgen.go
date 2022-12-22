@@ -30,7 +30,7 @@ func (c *Cgen) GenAST() {
 func (c *Cgen) genAST(tree *ASTNode) {
     if tree != nil {
         switch tree.nodeKind {
-        case PrintK, IfK:
+        case PrintK, IfK, VarK, AssignK:
             c.genStmt(tree)
         case OpK, ConstK, IdK:
             c.genExp(tree)
@@ -46,6 +46,11 @@ func (c *Cgen) genStmt(tree *ASTNode) {
     case PrintK:
         reg := c.genExp(tree.child[0])
         c.cgprintint(reg)
+    case VarK:
+        c.cgglobsym(tree.child[0].litval)
+    case AssignK:
+        reg := c.genExp(tree.child[0])
+        c.cgstoreglob(reg, tree.litval)
     default:
         c.error()
     }
@@ -75,9 +80,9 @@ func (c *Cgen) genExp(tree *ASTNode) int {
             return -1
         }
     case ConstK:
-        return c.cgload(tree.intval)
+        return c.cgloadint(tree.intval)
     case IdK:
-        return -1
+        return c.cgloadglob(tree.litval)
     default:
         return -1
     }
@@ -97,6 +102,7 @@ func (c *Cgen) freeall_registers() {
     fmt.Println("After Freeall: ", c.freereg)
 }
 
+// 分配一个空闲的寄存器
 func (c *Cgen) alloc_register() int {
     for i := 0; i < 4; i++ {
         if c.freereg[i] {
@@ -109,6 +115,7 @@ func (c *Cgen) alloc_register() int {
     return 0
 }
 
+// 释放一个使用状态的寄存器
 func (c *Cgen) free_register(reg int) {
     if c.freereg[reg] != false {
         fmt.Printf("Error trying to free register %d\n", reg)
@@ -117,6 +124,7 @@ func (c *Cgen) free_register(reg int) {
     c.freereg[reg] = true
 }
 
+// 汇编头
 func (c *Cgen) cgpreamble() {
     c.freeall_registers()
     _, _ = c.outfile.WriteString(`    .text
@@ -145,6 +153,7 @@ main:
 `)
 }
 
+// 汇编尾
 func (c *Cgen) cgpostamble() {
     _, _ = c.outfile.WriteString(`
     movl	$0, %eax
@@ -153,32 +162,36 @@ func (c *Cgen) cgpostamble() {
 `)
 }
 
-// 寄存器赋值为value
-func (c *Cgen) cgload(value int) int {
+// 加载整型
+func (c *Cgen) cgloadint(value int) int {
     //fmt.Println("value: ", value)
     r := c.alloc_register()
     _, _ = fmt.Fprintf(c.outfile, "\tmovq\t$%d, %s\n", value, c.reglist[r])
     return r
 }
 
+// 加法
 func (c *Cgen) cgadd(r1, r2 int) int {
     _, _ = fmt.Fprintf(c.outfile, "\taddq\t%s, %s\n", c.reglist[r1], c.reglist[r2])
     c.free_register(r1)
     return r2
 }
 
+// 减法
 func (c *Cgen) cgsub(r1, r2 int) int {
     _, _ = fmt.Fprintf(c.outfile, "\tsubq\t%s, %s\n", c.reglist[r2], c.reglist[r1])
     c.free_register(r2)
     return r1
 }
 
+// 乘法
 func (c *Cgen) cgmul(r1, r2 int) int {
     _, _ = fmt.Fprintf(c.outfile, "\timulq\t%s, %s\n", c.reglist[r1], c.reglist[r2])
     c.free_register(r1)
     return r2
 }
 
+// 除法
 func (c *Cgen) cgdiv(r1, r2 int) int {
     _, _ = fmt.Fprintf(c.outfile, "\tmovq\t%s,%%rax\n", c.reglist[r1])
     _, _ = fmt.Fprintf(c.outfile, "\tcqo\n")
@@ -188,8 +201,27 @@ func (c *Cgen) cgdiv(r1, r2 int) int {
     return r1
 }
 
+// 打印
 func (c *Cgen) cgprintint(r int) {
     _, _ = fmt.Fprintf(c.outfile, "\tmovq\t%s, %%rdi\n", c.reglist[r])
     _, _ = fmt.Fprintf(c.outfile, "\tcall\tprintint\n")
     c.free_register(r)
+}
+
+// 加载变量
+func (c *Cgen) cgloadglob(name string) int {
+    r := c.alloc_register()
+    _, _ = fmt.Fprintf(c.outfile, "\tmovq\t%s(%%rip), %s\n", name, c.reglist[r])
+    return r
+}
+
+// 变量赋值
+func (c *Cgen) cgstoreglob(r int, name string) int {
+    _, _ = fmt.Fprintf(c.outfile, "\tmovq\t%s, %s(%%rip)\n", c.reglist[r], name)
+    return r
+}
+
+// 创建变量
+func (c *Cgen) cgglobsym(name string) {
+    _, _ = fmt.Fprintf(c.outfile, "\t.comm\t%s,8,8\n", name)
 }

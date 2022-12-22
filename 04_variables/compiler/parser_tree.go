@@ -43,7 +43,7 @@ func NewASTNode(nodeKind NodeKind) *ASTNode {
         childLen = 2
     case ConstK:
         childLen = 0
-    case PrintK:
+    case PrintK, VarK, AssignK:
         childLen = 1
     }
 

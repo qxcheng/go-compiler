@@ -21,22 +21,25 @@ main:
 	pushq   %rbp
 	movq	%rsp, %rbp
 
+	.comm	a,8,8
+	.comm	b,8,8
 	movq	$3, %r8
+	movq	%r8, a(%rip)
 	movq	$4, %r9
-	addq	%r8, %r9
-	movq	$5, %r8
-	imulq	%r9, %r8
-	movq	%r8, %rdi
+	movq	$5, %r10
+	imulq	%r9, %r10
+	movq	%r10, b(%rip)
+	movq	a(%rip), %r9
+	movq	b(%rip), %r11
+	addq	%r9, %r11
+	movq	%r11, %rdi
 	call	printint
-	movq	$3, %r8
-	movq	$4, %r9
-	addq	%r8, %r9
-	movq	$5, %r8
-	subq	%r8, %r9
+	movq	a(%rip), %r9
+	movq	b(%rip), %r11
+	subq	%r11, %r9
 	movq	%r9, %rdi
 	call	printint
 
     movl	$0, %eax
 	popq	%rbp
 	ret
-ret

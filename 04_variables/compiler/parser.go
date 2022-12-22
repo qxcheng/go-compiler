@@ -50,16 +50,16 @@ func NewParser(file *os.File) *Parser {
     return &p
 }
 
-func (p *Parser) error() {
+func (p *Parser) error(msg string) {
     fmt.Println("Parse Error>> Line%d: %s\n, Position%d: %v\n", GLineno, p.s.linebuf, p.s.linepos, p.s.linebuf[p.s.linepos])
-    panic(0)
+    panic(msg)
 }
 
 func (p *Parser) match(token Token) {
     if p.curToken == token {
         p.curToken, p.curLit = p.s.GetToken()
     } else {
-        p.error()
+        p.error("Error: token not match")
     }
 }
 
@@ -93,9 +93,36 @@ func (p *Parser) statement() *ASTNode {
     switch p.curToken {
     case PRINT:
         t = p.print_stmt()
+    case VAR:
+        t = p.var_declaration()
+    case ID:
+        t = p.assign_stmt()
     default:
         return nil
     }
+    return t
+}
+
+// 变量声明
+func (p *Parser) var_declaration() *ASTNode {
+    t := NewASTNode(VarK)
+    p.match(VAR)
+    t.child[0] = p.exp()
+    Gsym.Addglob(t.child[0].litval)
+    p.match(INT)  // TODO 支持更多变量类型
+    return t
+}
+
+// 递归：赋值语句
+func (p *Parser) assign_stmt() *ASTNode {
+    t := NewASTNode(AssignK)
+    t.litval = p.curLit
+    if Gsym.Findglob(t.litval) == -1 {
+        p.error("Error: undefined var")
+    }
+    p.match(ID)
+    p.match(ASSIGN)
+    t.child[0] = p.exp()
     return t
 }
 
@@ -107,7 +134,7 @@ func (p *Parser) print_stmt() *ASTNode {
     return t
 }
 
-// 递归：表达式
+// 递归：表达式 == < >
 func (p *Parser) exp() *ASTNode {
     t := p.simple_exp()
     if p.curToken == EQ || p.curToken == LT || p.curToken == GT {
@@ -166,7 +193,7 @@ func (p *Parser) factor() *ASTNode {
         t = p.exp()
         p.match(RPAREN)
     default:
-        p.error()
+        p.error("Error: undefined token")
     }
     return t
 }
