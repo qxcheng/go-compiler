@@ -15,21 +15,34 @@ printint:
 	leave
 	ret
 
+	.data
+	.globl	c
+c:	.quad	0
+	.data
+	.globl	d
+d:	.quad	0
+
 	.text
 	.globl	myfunc
 	.type	myfunc, @function
 myfunc:
 	pushq	%rbp
 	movq	%rsp, %rbp
-	.comm	num,8,8
-	movq	%rdi, num(%rip)
-	movq	num(%rip), %r8
+	addq	$-16,%rsp
+	movq	%rdi, -8(%rbp)
+	movq	-8(%rbp), %r8
+	movq	(%r8), %r8
 	movq	$1, %r9
 	addq	%r8, %r9
-	movq	%r9, %rax
+	movq	-8(%rbp), %r8
+	movq	%r9, (%r8)
+	movq	-8(%rbp), %r10
+	movq	(%r10), %r10
+	movq	%r10, %rax
 	jmp	L0
 L0:
-    popq	%rbp
+	addq	$16,%rsp
+	popq	%rbp
 	ret
 
 	.text
@@ -38,22 +51,27 @@ L0:
 main:
 	pushq	%rbp
 	movq	%rsp, %rbp
-	.comm	a,8,8
-	.comm	b,8,8
-	movq	$0, %r8
-	movq	%r8, a(%rip)
-	movq	$10, %r9
-	movq	%r9, b(%rip)
+	addq	$-16,%rsp
+	movq	$10, %r8
+	movq	%r8, -8(%rbp)
+	movq	$0, %r9
+	movq	%r9, d(%rip)
+	movq	d(%rip), %r10
+	leaq	d(%rip), %r11
+	movq	%r11, c(%rip)
+	movq	c(%rip), %r12
+	movq	%r12, %rdi
+	call	printint
 L2:
-	movq	a(%rip), %r10
-	movq	b(%rip), %r11
-	cmpq	%r11, %r10
+	movq	d(%rip), %r12
+	movq	-8(%rbp), %r13
+	cmpq	%r13, %r12
 	jge	L3
-	movq	a(%rip), %r8
+	movq	d(%rip), %r8
 	movq	$5, %r9
 	cmpq	%r9, %r8
 	jge	L4
-	movq	a(%rip), %r8
+	movq	c(%rip), %r8
 	movq	%r8, %rdi
 	call	myfunc
 	movq	%rax, %r9
@@ -61,32 +79,21 @@ L2:
 	call	printint
 	jmp	L5
 L4:
-	movq	b(%rip), %r8
+	movq	$0, %r8
 	movq	%r8, %rdi
-	call	myfunc
-	movq	%rax, %r9
-	movq	%r9, %rdi
 	call	printint
-L5:
-	movq	a(%rip), %r8
+	movq	d(%rip), %r8
 	movq	$1, %r9
 	addq	%r8, %r9
-	movq	%r9, a(%rip)
+	movq	%r9, d(%rip)
+L5:
 	jmp	L2
 L3:
-	.comm	c,8,8
-	movq	a(%rip), %r8
-	leaq	a(%rip), %r9
-	movq	%r9, c(%rip)
-	movq	c(%rip), %r10
-	movq	%r10, %rdi
-	call	printint
-	movq	c(%rip), %r10
-	movq	(%r10), %r10
-	movq	$5, %r11
-	addq	%r10, %r11
-	movq	%r11, %rdi
+	movq	c(%rip), %r8
+	movq	(%r8), %r8
+	movq	%r8, %rdi
 	call	printint
 L1:
-    popq	%rbp
+	addq	$16,%rsp
+	popq	%rbp
 	ret

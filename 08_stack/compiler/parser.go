@@ -35,11 +35,13 @@ import (
 
 type Parser struct {
     s *Scanner
-    curToken Token  // 当前token
-    curLit string   // 当前lit
+    curToken Token    // 当前token
+    curLit string     // 当前lit
     cacheToken Token  // 向前查看一个token
     cacheLit string
-    currentFunc int  // 当前函数的插槽id 用于return语句
+
+    currentFunc int    // 当前所处函数的插槽id
+    currentOffset int  // local变量当前偏移量
 }
 
 func NewParser(file *os.File) *Parser {
@@ -48,6 +50,8 @@ func NewParser(file *os.File) *Parser {
         s: s,
         cacheToken: -1,
         cacheLit: "",
+        currentFunc: -1,
+        currentOffset: 0,
     }
     p.curToken, p.curLit = p.s.GetToken()
     return &p
@@ -58,6 +62,7 @@ func (p *Parser) error(msg string) {
     panic(msg)
 }
 
+// 匹配消耗一个token
 func (p *Parser) match(token Token) {
     if p.curToken == token {
         if p.cacheToken != -1 {
@@ -72,6 +77,7 @@ func (p *Parser) match(token Token) {
     }
 }
 
+// 往后查看一个token
 func (p *Parser) prev() Token {
     if p.cacheToken != -1 {
         return p.cacheToken
@@ -122,7 +128,7 @@ func (p *Parser) statement() *ASTNode {
         t = p.var_declaration()
     case FUNC:
         t = p.func_declaration()
-    case ID:
+    case ID, MUL:
         t = p.assign_stmt()
     case IF:
         t = p.if_stmt()
@@ -158,6 +164,70 @@ func (p *Parser) addglob(token Token, name string, isPointer bool) int {
     return i
 }
 
+func (p *Parser) addlocal(token Token, name string, isPointer bool) int {
+    var i int  // 变量的插槽位置
+    switch token {
+    case CHAR:
+        if isPointer {
+            i = Gsym.Addlocal(name, VAR_POINTER_CHAR)
+            p.currentOffset += 8
+            Gsym.SetOffset(i, -p.currentOffset)
+            Gsym.SetFuncOffset(p.currentFunc, 8)
+        } else {
+            i = Gsym.Addlocal(name, VAR_CHAR)
+            p.currentOffset += 4  // 为了对齐
+            Gsym.SetOffset(i, -p.currentOffset)
+            Gsym.SetFuncOffset(p.currentFunc, 4)
+        }
+    case INT:
+        if isPointer {
+            i = Gsym.Addlocal(name, VAR_POINTER_INT)
+            p.currentOffset += 8
+            Gsym.SetOffset(i, -p.currentOffset)
+            Gsym.SetFuncOffset(p.currentFunc, 8)
+        } else {
+            i = Gsym.Addlocal(name, VAR_INT)
+            p.currentOffset += 8
+            Gsym.SetOffset(i, -p.currentOffset)
+            Gsym.SetFuncOffset(p.currentFunc, 8)
+        }
+    default:
+        p.error("Parse error: unspported vartype")
+    }
+    if p.currentFunc != -1 {
+        Gsym.SetBelongFunc(i, p.currentFunc)  // 设置变量作用域
+    }
+    return i
+}
+
+//func (p *Parser) addparam(token Token, name string, isPointer bool) int {
+//    var i int  // 变量的插槽位置
+//    switch token {
+//    case CHAR:
+//        if isPointer {
+//            i = Gsym.Addlocal(name, VAR_POINTER_CHAR)
+//            Gsym.SetOffset(i, 16)
+//        } else {
+//            i = Gsym.Addlocal(name, VAR_CHAR)
+//            Gsym.SetOffset(i, 16)
+//        }
+//    case INT:
+//        if isPointer {
+//            i = Gsym.Addlocal(name, VAR_POINTER_INT)
+//            Gsym.SetOffset(i, 16)
+//        } else {
+//            i = Gsym.Addlocal(name, VAR_INT)
+//            Gsym.SetOffset(i, 16)
+//        }
+//    default:
+//        p.error("Parse error: unspported vartype")
+//    }
+//    if p.currentFunc != -1 {
+//        Gsym.SetBelongFunc(i, p.currentFunc)  // 设置变量作用域
+//    }
+//    return i
+//}
+
 // 声明: 变量
 func (p *Parser) var_declaration() *ASTNode {
     t := NewASTNode(VarK)
@@ -167,9 +237,17 @@ func (p *Parser) var_declaration() *ASTNode {
     p.match(ID)
     if p.curToken == MUL {
         p.match(MUL)
-        t.child[0].symbleid = p.addglob(p.curToken, t.child[0].litval, true)
+        if p.currentFunc == -1 {
+            t.child[0].symbleid = p.addglob(p.curToken, t.child[0].litval, true)
+        } else {
+            t.child[0].symbleid = p.addlocal(p.curToken, t.child[0].litval, true)
+        }
     } else {
-        t.child[0].symbleid = p.addglob(p.curToken, t.child[0].litval, false)
+        if p.currentFunc == -1 {
+            t.child[0].symbleid = p.addglob(p.curToken, t.child[0].litval, false)
+        } else {
+            t.child[0].symbleid = p.addlocal(p.curToken, t.child[0].litval, false)
+        }
     }
     //fmt.Println("222: ", t.child[0].symbleid, t.child[0].litval)
     p.match(p.curToken)
@@ -178,6 +256,7 @@ func (p *Parser) var_declaration() *ASTNode {
 
 // 声明：函数
 func (p *Parser) func_declaration() *ASTNode {
+    p.currentOffset = 0  // 新函数偏移量清0
     t := NewASTNode(FuncK)
     p.match(FUNC)
     t.token = p.curToken  // ID 或 IDENT(main)
@@ -191,8 +270,13 @@ func (p *Parser) func_declaration() *ASTNode {
         t.child[0] = NewASTNode(IdK)
         t.child[0].litval = p.curLit
         p.match(ID)
-        t.child[0].symbleid = p.addglob(p.curToken, t.child[0].litval, false)  // 暂时放在符号表
-        t.child[0].token = p.curToken  // 暂用于保存形参变量类型
+        if p.curToken == MUL {
+            p.match(MUL)
+            t.child[0].symbleid = p.addlocal(p.curToken, t.child[0].litval, true)
+        } else {
+            t.child[0].symbleid = p.addlocal(p.curToken, t.child[0].litval, false)
+        }
+        t.child[0].token = p.curToken  // 保存形参变量类型
         p.match(p.curToken)
     }
     p.match(RPAREN)
@@ -200,9 +284,9 @@ func (p *Parser) func_declaration() *ASTNode {
     if p.curToken != LBRACE {
         switch p.curToken {
         case CHAR:
-            Gsym.Setglob(t.symbleid, VAR_CHAR)
+            Gsym.SetReturnType(t.symbleid, VAR_CHAR)
         case INT:
-            Gsym.Setglob(t.symbleid, VAR_INT)
+            Gsym.SetReturnType(t.symbleid, VAR_INT)
         default:
             p.error("not supported return type")
         }
@@ -220,29 +304,26 @@ func (p *Parser) return_stmt() *ASTNode {
     t.symbleid = p.currentFunc
     p.match(RETURN)
     t.child[0] = p.exp()
-    //switch p.curToken {
-    //case ID:
-    //    t.child[0] = NewASTNode(IdK)
-    //    t.child[0].litval = p.curLit
-    //    t.child[0].symbleid = Gsym.Findglob(t.child[0].litval)
-    //    if t.child[0].symbleid == -1 {
-    //        p.error("Parse error: return undefined var")
-    //    }
-    //    p.match(ID)
-    //case NUM:
-    //    t.child[0] = NewASTNode(ConstK)
-    //    t.child[0].intval, _ = strconv.Atoi(p.curLit)
-    //    p.match(NUM)
-    //}
     return t
 }
 
+func (p *Parser) findvar(name string) (i int) {
+    i = Gsym.Findlocal(name)
+    if i == -1 {
+        i = Gsym.Findglob(name)
+    }
+    return
+}
 
 // 语句：赋值语句
 func (p *Parser) assign_stmt() *ASTNode {
     t := NewASTNode(AssignK)
+    if p.curToken == MUL {
+        t.token = MUL
+        p.match(MUL)
+    }
     t.litval = p.curLit
-    t.symbleid = Gsym.Findglob(t.litval)
+    t.symbleid = p.findvar(t.litval)
     if t.symbleid == -1 {
         p.error("Parse error: use undefined variable")
     }
@@ -353,7 +434,7 @@ func (p *Parser) factor() *ASTNode {
             case ID:
                 t.child[0] = NewASTNode(IdK)
                 t.child[0].litval = p.curLit  // 变量名
-                t.child[0].symbleid = Gsym.Findglob(p.curLit)
+                t.child[0].symbleid = p.findvar(p.curLit)
                 if t.symbleid == -1 {
                     p.error("Parse error: use undefined var")
                 }
@@ -366,7 +447,7 @@ func (p *Parser) factor() *ASTNode {
         } else {
             t = NewASTNode(IdK)
             t.litval = p.curLit
-            t.symbleid = Gsym.Findglob(t.litval)
+            t.symbleid = p.findvar(t.litval)
             if t.symbleid == -1 {
                 p.error("Parse error: use undefined var")
             }
@@ -382,9 +463,9 @@ func (p *Parser) factor() *ASTNode {
         p.match(p.curToken)
         t.child[0] = NewASTNode(IdK)
         t.litval = p.curLit
-        t.symbleid = Gsym.Findglob(p.curLit)
+        t.symbleid = p.findvar(p.curLit)
         t.child[0].litval = p.curLit
-        t.child[0].symbleid = Gsym.Findglob(p.curLit)
+        t.child[0].symbleid = p.findvar(p.curLit)
         p.match(ID)
     default:
         p.error("Error: undefined token")

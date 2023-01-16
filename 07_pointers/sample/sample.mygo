@@ -20,6 +20,11 @@ func main() {
         }
         a = a + 1;
     }
+
+    var c *int;
+    c = &a;
+    print c;
+    print *c+5;
 }
 
 

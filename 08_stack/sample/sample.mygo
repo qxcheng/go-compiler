@@ -1,0 +1,32 @@
+//package main
+
+//import "fmt"
+
+var c *int;
+var d int;
+
+func myfunc(num *int) int {
+	*num = *num + 1;
+	return *num;
+}
+
+func main() {
+    var a int;
+    a = 10;
+    d = 0
+    c = &d;
+    print c;
+
+    for d < a {
+        if d < 5 {
+            print myfunc(c);
+        } else {
+            print 0;
+            d = d + 1;
+        }
+    }
+    print *c;
+}
+
+
+

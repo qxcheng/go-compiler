@@ -51,10 +51,24 @@ func (c *Cgen) genStmt(tree *ASTNode) {
         c.cgprintint(reg)
     case VarK:
         //fmt.Println("111: ", tree.child[0].symbleid)
-        c.cgglobsym(tree.child[0].symbleid)
+        if !Gsym.symbles[tree.child[0].symbleid].IsLocal {
+            c.cgglobsym(tree.child[0].symbleid)
+        }
     case AssignK:
         reg := c.genExp(tree.child[0])
-        c.cgstoreglob(reg, tree.symbleid)
+        if Gsym.symbles[tree.symbleid].IsLocal {
+            if tree.token == MUL {
+                c.cgstorederef(reg, c.cgloadlocal(tree.symbleid), Gsym.symbles[tree.symbleid].Vartype)
+            } else {
+                c.cgstorelocal(reg, tree.symbleid)
+            }
+        } else {
+            if tree.token == MUL {
+                c.cgstorederef(reg, c.cgloadglob(tree.symbleid), Gsym.symbles[tree.symbleid].Vartype)
+            } else {
+                c.cgstoreglob(reg, tree.symbleid)
+            }
+        }
     case IfK:
         var Lfalse, Lend int
         Lfalse = c.genLabel()  // else分支的标签
@@ -89,15 +103,15 @@ func (c *Cgen) genStmt(tree *ASTNode) {
     case FuncK:
         Lend := c.genLabel()
         c.cgfuncpreamble(tree.litval)
+        // 形参处理
         if tree.child[0] != nil {
-            c.cgglobsym(tree.child[0].symbleid)
-            _, _ = fmt.Fprintf(c.outfile, "\tmovq\t%%rdi, %s(%%rip)\n", Gsym.symbles[tree.child[0].symbleid].Name)
+           _, _ = fmt.Fprintf(c.outfile, "\tmovq\t%%rdi, %d(%%rbp)\n", Gsym.symbles[tree.child[0].symbleid].Offset)
         }
         c.genAST(tree.child[1])
         c.freeall_registers()
         c.cglabel(Lend)
-        Gsym.Setglob(tree.symbleid, Lend)
-        c.cgfuncpostamble()
+        Gsym.SetEndLabel(tree.symbleid, Lend)
+        c.cgfuncpostamble(Gsym.GetFuncOffset(tree.symbleid))
     case ReturnK:
         reg := c.genExp(tree.child[0])
         c.cgreturn(reg, tree.symbleid)
@@ -111,7 +125,7 @@ func (c *Cgen) genExp(tree *ASTNode) int {
     var leftreg, rightreg int
 
     if len(tree.child) == 1 {
-        leftreg = c.genExp(tree.child[0])  // 函数调用
+        leftreg = c.genExp(tree.child[0])  // 一个子节点
     } else if len(tree.child) == 2 {
         //fmt.Println("111", tree.child[0], tree.child[1])
         leftreg = c.genExp(tree.child[0])
@@ -147,7 +161,11 @@ func (c *Cgen) genExp(tree *ASTNode) int {
     case ConstK:
         return c.cgloadint(tree.intval)
     case IdK:
-        return c.cgloadglob(tree.symbleid)
+        if Gsym.symbles[tree.symbleid].IsLocal {
+            return c.cgloadlocal(tree.symbleid)
+        } else {
+            return c.cgloadglob(tree.symbleid)
+        }
     case CallK:
         return c.cgcall(leftreg, tree.symbleid)
     case UnaryOpK:
@@ -167,8 +185,9 @@ func (c *Cgen) genExp(tree *ASTNode) int {
 func (c *Cgen) genIfExp(tree *ASTNode, label int) int {
     var leftreg, rightreg int
 
-    if len(tree.child) == 2 {
-        //fmt.Println("111", tree.child[0], tree.child[1])
+    if len(tree.child) == 1 {
+        leftreg = c.genIfExp(tree.child[0], -1)  // 一个子节点
+    } else if len(tree.child) == 2 {
         leftreg = c.genIfExp(tree.child[0], -1)  // 不支持多个比较运算符
         rightreg = c.genIfExp(tree.child[1], -1)
     }
@@ -202,7 +221,22 @@ func (c *Cgen) genIfExp(tree *ASTNode, label int) int {
     case ConstK:
         return c.cgloadint(tree.intval)
     case IdK:
-        return c.cgloadglob(tree.symbleid)
+        if Gsym.symbles[tree.symbleid].IsLocal {
+            return c.cgloadlocal(tree.symbleid)
+        } else {
+            return c.cgloadglob(tree.symbleid)
+        }
+    case CallK:
+        return c.cgcall(leftreg, tree.symbleid)
+    case UnaryOpK:
+        switch tree.token {
+        case MUL:
+            return c.cgderef(leftreg, Gsym.symbles[tree.symbleid].Vartype)
+        case AMPER:
+            return c.cgaddress(tree.symbleid)
+        default:
+            return -1
+        }
     default:
         return -1
     }
@@ -269,25 +303,28 @@ printint:
 	nop
 	leave
 	ret
+
 `)
 }
 
 // 函数头
 func (c *Cgen) cgfuncpreamble(name string) {
+    //fmt.Println(Gsym.symbles[Gsym.Findglob(name)].FuncOffset)
     _, _ = fmt.Fprintf(c.outfile, "\n\t.text\n" +
         "\t.globl\t%s\n" +
         "\t.type\t%s, @function\n" +
         "%s:\n" +
         "\tpushq\t%%rbp\n" +
-        "\tmovq\t%%rsp, %%rbp\n", name, name, name)
+        "\tmovq\t%%rsp, %%rbp\n" +
+        "\taddq\t$%d,%%rsp\n", name, name, name, -Gsym.GetFuncOffset(Gsym.Findglob(name)))
 }
 
-
 // 函数尾
-func (c *Cgen) cgfuncpostamble() {
-    _, _ = c.outfile.WriteString(`    popq	%rbp
-	ret
-`)
+func (c *Cgen) cgfuncpostamble(offset int) {
+    _, _ = fmt.Fprintf(c.outfile,
+        "\taddq\t$%d,%%rsp\n" +
+        "\tpopq	%%rbp\n" +
+        "\tret\n", offset)
 }
 
 // 加载整型
@@ -365,11 +402,15 @@ func (c *Cgen) cgstoreglob(r int, id int) int {
 
 // 创建变量
 func (c *Cgen) cgglobsym(id int) {
+    _, _ = fmt.Fprintf(c.outfile, "\t.data\n")
+    _, _ = fmt.Fprintf(c.outfile, "\t.globl\t%s\n", Gsym.symbles[id].Name)
+    _, _ = fmt.Fprintf(c.outfile, "%s:", Gsym.symbles[id].Name)
     switch Gsym.symbles[id].Vartype {
     case VAR_CHAR:
-        _, _ = fmt.Fprintf(c.outfile, "\t.comm\t%s,1,1\n", Gsym.symbles[id].Name)
+        _, _ = fmt.Fprintf(c.outfile, "\t.byte\t0\n")
     case VAR_INT, VAR_POINTER_INT, VAR_POINTER_CHAR:
-        _, _ = fmt.Fprintf(c.outfile, "\t.comm\t%s,8,8\n", Gsym.symbles[id].Name)
+       // _, _ = fmt.Fprintf(c.outfile, "\t.comm\t%s,8,8\n", Gsym.symbles[id].Name)
+        _, _ = fmt.Fprintf(c.outfile, "\t.quad\t0\n")
     default:
         c.error("Error: unspported vartype")
     }
@@ -437,6 +478,7 @@ func (c *Cgen) cgcompare_and_jump(r1 int, r2 int, how Token, label int) int {
 func (c *Cgen) cgcall(r int, id int) int {
     outr := c.alloc_register()
     _, _ = fmt.Fprintf(c.outfile, "\tmovq\t%s, %%rdi\n", c.reglist[r])
+    //_, _ = fmt.Fprintf(c.outfile, "\tpushq\t%s\n", c.reglist[r])
     _, _ = fmt.Fprintf(c.outfile, "\tcall\t%s\n", Gsym.symbles[id].Name)
     _, _ = fmt.Fprintf(c.outfile, "\tmovq\t%%rax, %s\n", c.reglist[outr])
     c.free_register(r)
@@ -472,6 +514,48 @@ func (c *Cgen) cgderef(r int, vartype Type) int {
         _, _ = fmt.Fprintf(c.outfile, "\tmovq\t(%s), %s\n", c.reglist[r], c.reglist[r])
     default:
         c.error("not supported pointer type")
+    }
+    return r
+}
+
+// 指针：r1赋值到r2指针
+func (c *Cgen) cgstorederef(r1 int, r2 int, vartype Type) int {
+    switch vartype {
+    case VAR_POINTER_CHAR:
+        _, _ = fmt.Fprintf(c.outfile, "\tmovb\t%s, (%s)\n", c.breglist[r1], c.reglist[r2])
+    case VAR_POINTER_INT:
+        _, _ = fmt.Fprintf(c.outfile, "\tmovq\t%s, (%s)\n", c.reglist[r1], c.reglist[r2])
+    default:
+        c.error("Error: undefined local type")
+    }
+    return r1
+}
+
+// 加载局部变量
+func (c *Cgen) cgloadlocal(id int) int {
+    r := c.alloc_register()
+    switch Gsym.symbles[id].Vartype {
+    case VAR_CHAR:
+        _, _ = fmt.Fprintf(c.outfile, "\tmovzbq\t%d(%%rbp), %s\n", Gsym.symbles[id].Offset, c.reglist[r])
+    case VAR_INT, VAR_POINTER_INT, VAR_POINTER_CHAR:
+        _, _ = fmt.Fprintf(c.outfile, "\tmovq\t%d(%%rbp), %s\n", Gsym.symbles[id].Offset, c.reglist[r])
+    default:
+        c.error("Error: undefined local type")
+    }
+    return r
+}
+
+// 局部变量赋值
+func (c *Cgen) cgstorelocal(r int, id int) int {
+    switch Gsym.symbles[id].Vartype {
+    case VAR_CHAR:
+        //_, _ = fmt.Fprintf(c.outfile, "\tpushl\t%s\n", c.breglist[r])
+        _, _ = fmt.Fprintf(c.outfile, "\tmovb\t%s, %d(%%rbp)\n", c.breglist[r], Gsym.symbles[id].Offset)
+    case VAR_INT, VAR_POINTER_INT, VAR_POINTER_CHAR:
+        _, _ = fmt.Fprintf(c.outfile, "\tmovq\t%s, %d(%%rbp)\n", c.reglist[r], Gsym.symbles[id].Offset)
+        //_, _ = fmt.Fprintf(c.outfile, "\tpushq\t%s\n", c.reglist[r])
+    default:
+        c.error("Error: undefined local type")
     }
     return r
 }
